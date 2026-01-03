@@ -1,49 +1,90 @@
 import { InventoryItem, OutboundRecord } from '../types';
+import { dbService } from './db';
 
-const KEYS = {
+const LEGACY_KEYS = {
   INVENTORY: 'pyro_inventory_v1',
   HISTORY: 'pyro_history_v1',
 };
 
-export const saveInventory = (items: InventoryItem[]) => {
+// --- MIGRATION UTILS ---
+const migrateLegacyData = async () => {
   try {
-    localStorage.setItem(KEYS.INVENTORY, JSON.stringify(items));
+    // Check if we have legacy data
+    const rawInv = localStorage.getItem(LEGACY_KEYS.INVENTORY);
+    const rawHis = localStorage.getItem(LEGACY_KEYS.HISTORY);
+
+    if (rawInv) {
+      const items = JSON.parse(rawInv);
+      if (Array.isArray(items) && items.length > 0) {
+        console.log("Migrating Inventory to DB...");
+        await dbService.saveAll(dbService.STORES.INVENTORY, items);
+      }
+      localStorage.removeItem(LEGACY_KEYS.INVENTORY);
+    }
+
+    if (rawHis) {
+      const records = JSON.parse(rawHis);
+      if (Array.isArray(records) && records.length > 0) {
+        console.log("Migrating History to DB...");
+        await dbService.saveAll(dbService.STORES.HISTORY, records);
+      }
+      localStorage.removeItem(LEGACY_KEYS.HISTORY);
+    }
   } catch (e) {
-    console.error("Failed to save inventory", e);
+    console.error("Migration failed", e);
   }
 };
 
-export const loadInventory = (): InventoryItem[] => {
+// --- ASYNC OPERATIONS ---
+
+export const saveInventory = async (items: InventoryItem[]) => {
   try {
-    const data = localStorage.getItem(KEYS.INVENTORY);
-    // Migration logic for old data could go here if needed, but UI handles undefined well
-    return data ? JSON.parse(data) : [];
+    await dbService.saveAll(dbService.STORES.INVENTORY, items);
   } catch (e) {
+    console.error("Failed to save inventory to DB", e);
+  }
+};
+
+export const loadInventory = async (): Promise<InventoryItem[]> => {
+  try {
+    // Check for migration first
+    if (localStorage.getItem(LEGACY_KEYS.INVENTORY)) {
+      await migrateLegacyData();
+    }
+    return await dbService.getAll<InventoryItem>(dbService.STORES.INVENTORY);
+  } catch (e) {
+    console.error("Failed to load inventory", e);
     return [];
   }
 };
 
-export const saveHistory = (records: OutboundRecord[]) => {
+export const saveHistory = async (records: OutboundRecord[]) => {
   try {
-    localStorage.setItem(KEYS.HISTORY, JSON.stringify(records));
+    await dbService.saveAll(dbService.STORES.HISTORY, records);
   } catch (e) {
-    console.error("Failed to save history", e);
+    console.error("Failed to save history to DB", e);
   }
 };
 
-export const loadHistory = (): OutboundRecord[] => {
+export const loadHistory = async (): Promise<OutboundRecord[]> => {
   try {
-    const data = localStorage.getItem(KEYS.HISTORY);
-    return data ? JSON.parse(data) : [];
+    if (localStorage.getItem(LEGACY_KEYS.HISTORY)) {
+      await migrateLegacyData();
+    }
+    return await dbService.getAll<OutboundRecord>(dbService.STORES.HISTORY);
   } catch (e) {
+    console.error("Failed to load history", e);
     return [];
   }
 };
 
-export const exportData = () => {
+export const exportData = async () => {
+  const inventory = await loadInventory();
+  const history = await loadHistory();
+  
   const data = {
-    inventory: loadInventory(),
-    history: loadHistory(),
+    inventory,
+    history,
     exportedAt: new Date().toISOString(),
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -88,7 +129,7 @@ export const downloadInventoryTemplate = () => {
   downloadCSV(csvContent, "库存导入模板_双仓版.csv");
 };
 
-// --- HISTORY EXPORTS ---
+// --- HISTORY EXPORTS (Client-side data processing, no changes needed for params) ---
 
 export const exportHistoryToCSV = (records: OutboundRecord[]) => {
   // Simplified columns per request

@@ -4,7 +4,7 @@ import * as storage from './services/storageService';
 import InventoryManager from './components/InventoryManager';
 import OutboundProcessor from './components/OutboundProcessor';
 import StatisticsPanel from './components/StatisticsPanel';
-import { LayoutDashboard, Package, ArrowUpRight, Download, Settings, Split } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowUpRight, Download, Settings, Split, Database } from 'lucide-react';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'inventory' | 'outbound' | 'history'>('outbound');
@@ -12,22 +12,42 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<OutboundRecord[]>([]);
   const [showGlobalConfig, setShowGlobalConfig] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  
+  // Data loading state to prevent overwriting DB with empty array on startup
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
 
-  // Load data on mount
+  // Load data on mount (Async for DB)
   useEffect(() => {
-    setInventory(storage.loadInventory());
-    setHistory(storage.loadHistory());
+    const initData = async () => {
+      try {
+        const [loadedInventory, loadedHistory] = await Promise.all([
+          storage.loadInventory(),
+          storage.loadHistory()
+        ]);
+        setInventory(loadedInventory);
+        setHistory(loadedHistory);
+        setIsDataLoaded(true); // Enable auto-save
+      } catch (e) {
+        console.error("Initialization failed:", e);
+        setIsDataLoaded(true); // Enable anyway so app is usable even if DB fails
+      }
+    };
+    initData();
     setApiKey(localStorage.getItem('PYRO_API_KEY') || '');
   }, []);
 
-  // Save data on change
+  // Save data on change (Only after initial load)
   useEffect(() => {
-    storage.saveInventory(inventory);
-  }, [inventory]);
+    if (isDataLoaded) {
+      storage.saveInventory(inventory);
+    }
+  }, [inventory, isDataLoaded]);
 
   useEffect(() => {
-    storage.saveHistory(history);
-  }, [history]);
+    if (isDataLoaded) {
+      storage.saveHistory(history);
+    }
+  }, [history, isDataLoaded]);
 
   const saveApiKey = () => {
       localStorage.setItem('PYRO_API_KEY', apiKey);
@@ -102,7 +122,7 @@ const App: React.FC = () => {
                 <Settings size={16} /> API 配置
              </button>
              <button onClick={storage.exportData} className="text-gray-500 hover:text-gray-900 flex items-center gap-1 text-sm">
-                <Download size={16} /> 备份数据
+                <Database size={16} /> 备份数据
              </button>
           </div>
         </div>
@@ -147,33 +167,41 @@ const App: React.FC = () => {
 
         {/* Tab Content */}
         <div className="space-y-6">
-          {activeTab === 'outbound' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900 mb-4">文本解析录入</h3>
-                <OutboundProcessor inventory={inventory} onCommit={handleOutboundCommit} />
-              </div>
-              <div className="hidden lg:block bg-indigo-50 rounded-xl p-8 border border-indigo-100 flex flex-col justify-center items-center text-center">
-                 <div className="bg-white p-4 rounded-full shadow-md mb-4">
-                    <Split className="text-indigo-600" size={48} />
-                 </div>
-                 <h4 className="text-indigo-900 font-bold text-xl mb-2">智能分仓出库</h4>
-                 <p className="text-indigo-700/80 max-w-xs">
-                   系统解析后默认全量分配给“峰仓”。您可以在右侧输入框快速划拨“爽仓”的出货数量，系统自动平衡库存扣减。
-                 </p>
-                 <div className="mt-6 text-xs text-indigo-400">
-                    支持正则快速解析与 DeepSeek 智能语义分析
-                 </div>
-              </div>
-            </div>
-          )}
+          {!isDataLoaded ? (
+             <div className="flex justify-center items-center py-20">
+                 <div className="text-gray-400 text-lg animate-pulse">正在加载数据库...</div>
+             </div>
+          ) : (
+            <>
+              {activeTab === 'outbound' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-4">文本解析录入</h3>
+                    <OutboundProcessor inventory={inventory} onCommit={handleOutboundCommit} />
+                  </div>
+                  <div className="hidden lg:block bg-indigo-50 rounded-xl p-8 border border-indigo-100 flex flex-col justify-center items-center text-center">
+                     <div className="bg-white p-4 rounded-full shadow-md mb-4">
+                        <Split className="text-indigo-600" size={48} />
+                     </div>
+                     <h4 className="text-indigo-900 font-bold text-xl mb-2">智能分仓出库</h4>
+                     <p className="text-indigo-700/80 max-w-xs">
+                       系统解析后默认全量分配给“峰仓”。您可以在右侧输入框快速划拨“爽仓”的出货数量，系统自动平衡库存扣减。
+                     </p>
+                     <div className="mt-6 text-xs text-indigo-400">
+                        支持正则快速解析与 DeepSeek 智能语义分析
+                     </div>
+                  </div>
+                </div>
+              )}
 
-          {activeTab === 'inventory' && (
-            <InventoryManager inventory={inventory} setInventory={setInventory} />
-          )}
+              {activeTab === 'inventory' && (
+                <InventoryManager inventory={inventory} setInventory={setInventory} />
+              )}
 
-          {activeTab === 'history' && (
-             <StatisticsPanel history={history} />
+              {activeTab === 'history' && (
+                 <StatisticsPanel history={history} />
+              )}
+            </>
           )}
         </div>
 
