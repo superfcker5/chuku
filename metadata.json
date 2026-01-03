@@ -1,0 +1,5 @@
+{
+  "name": "智能出库",
+  "description": "智能烟花进销存管理系统，支持双重利润计算、DeepSeek 智能解析与Excel导出。",
+  "requestFramePermissions": []
+}
