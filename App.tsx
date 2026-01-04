@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { InventoryItem, OutboundRecord } from './types';
 import * as storage from './services/storageService';
 import InventoryManager from './components/InventoryManager';
 import OutboundProcessor from './components/OutboundProcessor';
 import StatisticsPanel from './components/StatisticsPanel';
-import { LayoutDashboard, Package, ArrowUpRight, Download, Settings, Split, Database } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowUpRight, Settings, Split, Database, UploadCloud } from 'lucide-react';
+import { dbService } from './services/db';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'inventory' | 'outbound' | 'history'>('outbound');
@@ -15,6 +16,7 @@ const App: React.FC = () => {
   
   // Data loading state to prevent overwriting DB with empty array on startup
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load data on mount (Async for DB)
   useEffect(() => {
@@ -55,8 +57,47 @@ const App: React.FC = () => {
       alert("API Key 已更新，AI 功能将使用新 Key。");
   };
 
+  const handleRestoreData = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+          try {
+              const json = JSON.parse(event.target?.result as string);
+              if (json.inventory && Array.isArray(json.inventory) && json.history && Array.isArray(json.history)) {
+                  if (window.confirm(`确认恢复数据？\n这将覆盖当前所有数据！\n包含: ${json.inventory.length} 个库存商品, ${json.history.length} 条历史记录。`)) {
+                      // Update State
+                      setInventory(json.inventory);
+                      setHistory(json.history);
+                      
+                      // Force save to DB immediately
+                      await dbService.saveAll(dbService.STORES.INVENTORY, json.inventory);
+                      await dbService.saveAll(dbService.STORES.HISTORY, json.history);
+                      
+                      alert("数据恢复成功！");
+                  }
+              } else {
+                  alert("无效的备份文件格式。");
+              }
+          } catch (err) {
+              console.error(err);
+              alert("读取文件失败，请确保是正确的 JSON 备份文件。");
+          }
+          if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+      reader.readAsText(file);
+  };
+
   const handleOutboundCommit = (record: OutboundRecord) => {
     // 1. Add to history
+    // Add initial log
+    record.historyLogs = [{
+        date: new Date().toLocaleString(),
+        action: 'CREATE',
+        details: '订单创建'
+    }];
+    
     const newHistory = [record, ...history];
     setHistory(newHistory);
 
@@ -106,6 +147,79 @@ const App: React.FC = () => {
     setActiveTab('history');
   };
 
+  const handleDeleteHistory = (recordId: string) => {
+    const record = history.find(r => r.id === recordId);
+    if (!record) return;
+
+    // Restore Stock logic
+    const updatedInventory = inventory.map(invItem => {
+       const recItems = record.items.filter(ri => ri.invId === invItem.id);
+       if (recItems.length === 0) return invItem;
+
+       const spec = invItem.spec || 1;
+       let totalShuangUnits = ((invItem.stockShuangBoxes||0) * spec) + (invItem.stockShuangUnits||0);
+       let totalFengUnits = ((invItem.stockFengBoxes||0) * spec) + (invItem.stockFengUnits||0);
+
+       recItems.forEach(ri => {
+           totalShuangUnits += (ri.outShuangBoxes * spec) + ri.outShuangUnits;
+           totalFengUnits += (ri.outFengBoxes * spec) + ri.outFengUnits;
+       });
+
+       return {
+           ...invItem,
+           stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
+           stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
+           stockFengBoxes: Math.trunc(totalFengUnits / spec),
+           stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
+       };
+    });
+
+    setInventory(updatedInventory);
+    setHistory(history.filter(h => h.id !== recordId));
+  };
+
+  const handleUpdateHistory = (newRecord: OutboundRecord) => {
+     const oldRecord = history.find(r => r.id === newRecord.id);
+     if (!oldRecord) return;
+
+     // We simulate a revert of old and apply of new
+     const updatedInventory = inventory.map(invItem => {
+         // Revert Old
+         const oldItems = oldRecord.items.filter(ri => ri.invId === invItem.id);
+         // Apply New
+         const newItems = newRecord.items.filter(ri => ri.invId === invItem.id);
+         
+         if (oldItems.length === 0 && newItems.length === 0) return invItem;
+
+         const spec = invItem.spec || 1;
+         let totalShuangUnits = ((invItem.stockShuangBoxes||0) * spec) + (invItem.stockShuangUnits||0);
+         let totalFengUnits = ((invItem.stockFengBoxes||0) * spec) + (invItem.stockFengUnits||0);
+
+         // Add back old
+         oldItems.forEach(ri => {
+             totalShuangUnits += (ri.outShuangBoxes * spec) + ri.outShuangUnits;
+             totalFengUnits += (ri.outFengBoxes * spec) + ri.outFengUnits;
+         });
+
+         // Subtract new
+         newItems.forEach(ri => {
+             totalShuangUnits -= (ri.outShuangBoxes * spec) + ri.outShuangUnits;
+             totalFengUnits -= (ri.outFengBoxes * spec) + ri.outFengUnits;
+         });
+
+         return {
+             ...invItem,
+             stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
+             stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
+             stockFengBoxes: Math.trunc(totalFengUnits / spec),
+             stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
+         };
+     });
+
+     setInventory(updatedInventory);
+     setHistory(history.map(r => r.id === newRecord.id ? newRecord : r));
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
@@ -124,6 +238,10 @@ const App: React.FC = () => {
              <button onClick={storage.exportData} className="text-gray-500 hover:text-gray-900 flex items-center gap-1 text-sm">
                 <Database size={16} /> 备份数据
              </button>
+             <button onClick={() => fileInputRef.current?.click()} className="text-gray-500 hover:text-blue-600 flex items-center gap-1 text-sm">
+                <UploadCloud size={16} /> 恢复数据
+             </button>
+             <input type="file" ref={fileInputRef} onChange={handleRestoreData} className="hidden" accept=".json"/>
           </div>
         </div>
       </header>
@@ -199,7 +317,12 @@ const App: React.FC = () => {
               )}
 
               {activeTab === 'history' && (
-                 <StatisticsPanel history={history} />
+                 <StatisticsPanel 
+                    history={history} 
+                    inventory={inventory}
+                    onDeleteRecord={handleDeleteHistory}
+                    onUpdateRecord={handleUpdateHistory}
+                 />
               )}
             </>
           )}

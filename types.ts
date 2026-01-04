@@ -1,3 +1,4 @@
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -33,6 +34,13 @@ export interface OutboundItemParsed {
   // UI State for allocation (Default Feng=Total, Shuang=0)
   assignedShuangBoxes?: number;
   assignedShuangUnits?: number;
+}
+
+export interface ModificationLog {
+  date: string;
+  action: 'CREATE' | 'EDIT' | 'RETURN';
+  details: string; // e.g. "Returned 2 boxes of Product A"
+  note?: string;   // User typed reason
 }
 
 export interface OutboundRecord {
@@ -82,6 +90,9 @@ export interface OutboundRecord {
   totalPersonalExtra: number;
   
   rawText: string;
+  
+  // Audit Trail
+  historyLogs?: ModificationLog[];
 }
 
 export interface ImportPreviewItem {

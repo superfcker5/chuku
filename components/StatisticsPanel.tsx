@@ -1,16 +1,19 @@
 import React, { useState, useMemo } from 'react';
-import { OutboundRecord } from '../types';
+import { InventoryItem, OutboundRecord } from '../types';
 import HistoryTable from './HistoryTable';
 import { exportHistoryToCSV, exportHistorySummaryToCSV } from '../services/storageService';
 import { Search, Download, Users, List, BarChart3, TrendingUp, Wallet, User, CheckSquare, Square, Coins, ChevronDown } from 'lucide-react';
 
 interface Props {
   history: OutboundRecord[];
+  inventory: InventoryItem[];
+  onDeleteRecord: (id: string) => void;
+  onUpdateRecord: (record: OutboundRecord) => void;
 }
 
 type ViewMode = 'overview' | 'person_rank' | 'product_matrix';
 
-const StatisticsPanel: React.FC<Props> = ({ history }) => {
+const StatisticsPanel: React.FC<Props> = ({ history, inventory, onDeleteRecord, onUpdateRecord }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   
   // Filters
@@ -349,7 +352,12 @@ const StatisticsPanel: React.FC<Props> = ({ history }) => {
       {/* Content Area */}
       <div>
           {viewMode === 'overview' && (
-              <HistoryTable history={filteredHistory} />
+              <HistoryTable 
+                history={filteredHistory} 
+                inventory={inventory}
+                onDelete={onDeleteRecord}
+                onUpdate={onUpdateRecord}
+              />
           )}
 
           {viewMode === 'person_rank' && (
