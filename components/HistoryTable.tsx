@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp, Coins, Wallet, Trash2, Edit2, X, Save, AlertTri
 interface Props {
   history: OutboundRecord[];
   inventory: InventoryItem[];
-  onDelete: (id: string) => void;
+  onDelete: (record: OutboundRecord) => void;
   onUpdate: (record: OutboundRecord) => void;
 }
 
@@ -37,6 +37,7 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
   // --- EDIT HANDLERS ---
   const handleEditClick = (e: React.MouseEvent, record: OutboundRecord) => {
       e.stopPropagation();
+      e.preventDefault();
       setEditingRecord(JSON.parse(JSON.stringify(record)));
       setEditReason('');
   };
@@ -136,10 +137,34 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
   // --- RETURN HANDLERS ---
   const handleReturnClick = (e: React.MouseEvent, record: OutboundRecord) => {
       e.stopPropagation();
+      e.preventDefault();
       setReturningRecord(record);
       setReturnQuantities({});
       setReturnRefundAmount(0);
       setReturnReason('');
+  };
+
+  // Helper to calculate theoretical value of returned goods
+  const calculateGoodsValue = (record: OutboundRecord, quantities: Record<number, {boxes: number, units: number}>) => {
+      let total = 0;
+      Object.keys(quantities).forEach((key) => {
+          const idx = Number(key);
+          const qty = quantities[idx];
+          if (!qty) return;
+          
+          const item = record.items[idx];
+          const invItem = inventory.find(inv => inv.id === item.invId);
+          const spec = invItem?.spec || 1;
+          
+          const itemTotalUnits = (item.qtyBoxes * spec) + item.qtyUnits;
+          const returnTotalUnits = (qty.boxes * spec) + qty.units;
+          
+          if (itemTotalUnits > 0) {
+             const pricePerUnit = item.soldPrice / itemTotalUnits;
+             total += pricePerUnit * returnTotalUnits;
+          }
+      });
+      return Math.floor(total);
   };
 
   const updateReturnQty = (index: number, type: 'boxes' | 'units', value: number) => {
@@ -148,24 +173,11 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
       const newQtys = { ...returnQuantities, [index]: updated };
       setReturnQuantities(newQtys);
 
-      // Auto-calculate suggested refund
+      // Auto-calculate suggested refund when quantity changes
+      // User can override this later
       if (returningRecord) {
-          let suggestedRefund = 0;
-          Object.entries(newQtys).forEach(([idx, qty]) => {
-              const i = Number(idx);
-              const item = returningRecord.items[i];
-              const invItem = inventory.find(inv => inv.id === item.invId);
-              const spec = invItem?.spec || 1;
-              
-              const itemTotalUnits = (item.qtyBoxes * spec) + item.qtyUnits;
-              const returnTotalUnits = (qty.boxes * spec) + qty.units;
-              
-              if (itemTotalUnits > 0) {
-                 const pricePerUnit = item.soldPrice / itemTotalUnits;
-                 suggestedRefund += pricePerUnit * returnTotalUnits;
-              }
-          });
-          setReturnRefundAmount(Math.floor(suggestedRefund));
+          const suggested = calculateGoodsValue(returningRecord, newQtys);
+          setReturnRefundAmount(suggested);
       }
   };
 
@@ -174,9 +186,13 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
       
       // Validation
       let hasReturn = false;
-      for (const [idx, qtyUnknown] of Object.entries(returnQuantities)) {
-          const qty = qtyUnknown as { boxes: number, units: number };
-          const item = returningRecord.items[Number(idx)];
+      const keys = Object.keys(returnQuantities);
+      for (const idxStr of keys) {
+          const idx = Number(idxStr);
+          const qty = returnQuantities[idx];
+          if (!qty) continue;
+
+          const item = returningRecord.items[idx];
           const invItem = inventory.find(inv => inv.id === item.invId);
           const spec = invItem?.spec || 1;
           
@@ -212,7 +228,6 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           const newUnits = Number((newTotalUnits % spec).toFixed(4));
           
           // Adjust Warehouse Out (Reduce from Feng first, then Shuang)
-          // Logic: We need to reduce 'outFeng' and 'outShuang' so that inventory increases back in App.tsx logic
           const oldOutFengUnits = (item.outFengBoxes * spec) + item.outFengUnits;
           const oldOutShuangUnits = (item.outShuangBoxes * spec) + item.outShuangUnits;
 
@@ -235,7 +250,8 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           const newOutShuangUnits = Number((newOutShuangTotal % spec).toFixed(4));
 
           // Adjust Costs/Price
-          const ratio = newTotalUnits / oldTotalUnits; // If 0 units left, ratio is 0
+          // Reduce the item's total sold/cost/wholesale value proportionally to the quantity reduction.
+          const ratio = newTotalUnits / oldTotalUnits; 
           
           logDetails.push(`${item.productName} 退 ${ret.boxes}箱${ret.units}个`);
 
@@ -255,7 +271,7 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           };
       });
 
-      // Recalculate Totals
+      // Recalculate Totals based on remaining goods
       let newTotalSale = 0;
       let newTotalCost = 0;
       let newTotalWholesale = 0;
@@ -268,10 +284,12 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           newTotalRetail += item.retailTotal;
       });
 
-      // Original Actual Received - Refund Amount
+      // Calculate New Actual Received based on User's Manual Refund Amount
+      // CRITICAL: We subtract the actual money refunded from the original money received.
       const oldActual = returningRecord.actualReceived ?? returningRecord.totalSale;
       const newActualReceived = oldActual - returnRefundAmount;
 
+      // Recalculate Profits based on the New Actual Received
       const personalExtra = Math.max(0, newActualReceived - newTotalRetail);
       const wholesaleSurplus = (newActualReceived - newTotalWholesale) - personalExtra;
       const baseProfit = newTotalWholesale - newTotalCost;
@@ -280,7 +298,7 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           date: new Date().toLocaleString(),
           action: 'RETURN',
           details: logDetails.join(', '),
-          note: `退款金额: ¥${returnRefundAmount}。${returnReason}`
+          note: `实际退款: ¥${returnRefundAmount}。${returnReason}`
       };
 
       const finalRecord: OutboundRecord = {
@@ -305,10 +323,11 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
       setReturningRecord(null);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent, id: string) => {
+  const handleDeleteClick = (e: React.MouseEvent, record: OutboundRecord) => {
       e.stopPropagation();
+      e.preventDefault(); 
       if(window.confirm("确定要删除此订单吗？删除后库存会自动退回。")) {
-          onDelete(id);
+          onDelete(record);
       }
   };
 
@@ -335,7 +354,7 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
         <div key={record.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm group">
           <div 
             onClick={() => toggleExpand(record.id)}
-            className="flex flex-col sm:flex-row sm:items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition gap-4"
+            className="flex flex-col sm:flex-row sm:items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition gap-4 relative z-0"
           >
             <div className="flex gap-4 items-center">
               <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs shrink-0 relative">
@@ -390,22 +409,25 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
           </div>
 
           {expandedId === record.id && (
-            <div className="bg-gray-50 border-t border-gray-100 p-4 relative">
-               <div className="absolute top-4 right-4 flex gap-2">
+            <div className="bg-gray-50 border-t border-gray-100 p-4 relative z-10">
+               <div className="absolute top-4 right-4 flex gap-2 z-20">
                    <button 
+                     type="button"
                      onClick={(e) => handleReturnClick(e, record)}
                      className="flex items-center gap-1 px-3 py-1.5 bg-yellow-50 text-yellow-700 text-xs rounded hover:bg-yellow-100 border border-yellow-200"
                    >
                        <RotateCcw size={12}/> 申请退货
                    </button>
                    <button 
+                     type="button"
                      onClick={(e) => handleEditClick(e, record)}
                      className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 text-indigo-700 text-xs rounded hover:bg-indigo-100 border border-indigo-200"
                    >
                        <Edit2 size={12}/> 修改纠错
                    </button>
                    <button 
-                     onClick={(e) => handleDeleteClick(e, record.id)}
+                     type="button"
+                     onClick={(e) => handleDeleteClick(e, record)}
                      className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-700 text-xs rounded hover:bg-red-100 border border-red-200"
                    >
                        <Trash2 size={12}/> 删除
@@ -484,7 +506,7 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
         );
       })}
     </div>
-
+    {/* Modals omitted for brevity - no changes needed there */}
     {/* EDIT MODAL (CORRECTION) */}
     {editingRecord && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -672,12 +694,24 @@ const HistoryTable: React.FC<Props> = ({ history, inventory, onDelete, onUpdate 
 
                     <div className="space-y-3">
                         <div className="flex justify-between items-center bg-gray-50 p-3 rounded">
-                            <span className="font-bold text-gray-700">应退款金额</span>
+                            <div>
+                                <span className="font-bold text-gray-700 block">实际退款金额 <span className="text-xs font-normal text-gray-400">(可修改)</span></span>
+                                {returningRecord && calculateGoodsValue(returningRecord, returnQuantities) !== returnRefundAmount && (
+                                     <span className="text-xs text-orange-600 font-medium">
+                                         (货品原值: ¥{calculateGoodsValue(returningRecord, returnQuantities)})
+                                     </span>
+                                )}
+                                {returningRecord && calculateGoodsValue(returningRecord, returnQuantities) === returnRefundAmount && (
+                                     <span className="text-xs text-gray-400">
+                                         (货品原值: ¥{returnRefundAmount})
+                                     </span>
+                                )}
+                            </div>
                             <div className="flex items-center gap-1">
                                 <span className="text-lg font-bold text-red-600">- ¥</span>
                                 <input 
                                     type="number" 
-                                    className="w-24 p-1 text-lg font-bold text-red-600 bg-white border rounded text-right"
+                                    className="w-24 p-1 text-lg font-bold text-red-600 bg-white border border-gray-300 rounded text-right focus:ring-2 focus:ring-red-200 outline-none"
                                     value={returnRefundAmount}
                                     onChange={e => setReturnRefundAmount(Number(e.target.value))}
                                 />

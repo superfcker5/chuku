@@ -90,134 +90,142 @@ const App: React.FC = () => {
   };
 
   const handleOutboundCommit = (record: OutboundRecord) => {
-    // 1. Add to history
-    // Add initial log
-    record.historyLogs = [{
-        date: new Date().toLocaleString(),
-        action: 'CREATE',
-        details: '订单创建'
-    }];
+    // 1. Add to history (Functional Update)
+    const recordWithLog = {
+        ...record,
+        historyLogs: [{
+            date: new Date().toLocaleString(),
+            action: 'CREATE' as const,
+            details: '订单创建'
+        }]
+    };
     
-    const newHistory = [record, ...history];
-    setHistory(newHistory);
+    setHistory(prev => [recordWithLog, ...prev]);
 
-    // 2. Deduct from inventory based on per-item allocation
-    const updatedInventory = inventory.map(item => {
-      // Find all items in the record that matched this inventory item
-      const recordItems = record.items.filter(ri => {
-         return ri.invId === item.id; 
-      });
+    // 2. Deduct from inventory based on per-item allocation (Functional Update)
+    setInventory(prevInventory => {
+        return prevInventory.map(item => {
+          // Find all items in the record that matched this inventory item
+          const recordItems = record.items.filter(ri => ri.invId === item.id);
 
-      if (recordItems.length === 0) return item;
+          if (recordItems.length === 0) return item;
 
-      const spec = item.spec > 0 ? item.spec : 1;
-      
-      // Calculate current total units for each warehouse
-      const currentShuangUnits = ((item.stockShuangBoxes || 0) * spec) + (item.stockShuangUnits || 0);
-      const currentFengUnits = ((item.stockFengBoxes || 0) * spec) + (item.stockFengUnits || 0);
+          const spec = item.spec > 0 ? item.spec : 1;
+          
+          // Calculate current total units for each warehouse
+          const currentShuangUnits = ((Number(item.stockShuangBoxes) || 0) * spec) + (Number(item.stockShuangUnits) || 0);
+          const currentFengUnits = ((Number(item.stockFengBoxes) || 0) * spec) + (Number(item.stockFengUnits) || 0);
 
-      let deductShuangUnitsTotal = 0;
-      let deductFengUnitsTotal = 0;
+          let deductShuangUnitsTotal = 0;
+          let deductFengUnitsTotal = 0;
 
-      recordItems.forEach(ri => {
-        deductShuangUnitsTotal += (ri.outShuangBoxes * spec) + ri.outShuangUnits;
-        deductFengUnitsTotal += (ri.outFengBoxes * spec) + ri.outFengUnits;
-      });
+          recordItems.forEach(ri => {
+            deductShuangUnitsTotal += (Number(ri.outShuangBoxes) * spec) + Number(ri.outShuangUnits);
+            deductFengUnitsTotal += (Number(ri.outFengBoxes) * spec) + Number(ri.outFengUnits);
+          });
 
-      const newShuangUnits = currentShuangUnits - deductShuangUnitsTotal;
-      const newFengUnits = currentFengUnits - deductFengUnitsTotal;
+          const newShuangUnits = currentShuangUnits - deductShuangUnitsTotal;
+          const newFengUnits = currentFengUnits - deductFengUnitsTotal;
 
-      // Convert back to Boxes + Units
-      const newShuangStockBoxes = Math.trunc(newShuangUnits / spec);
-      const newShuangStockUnits = Number((newShuangUnits % spec).toFixed(4));
-      
-      const newFengStockBoxes = Math.trunc(newFengUnits / spec);
-      const newFengStockUnits = Number((newFengUnits % spec).toFixed(4));
+          // Convert back to Boxes + Units
+          const newShuangStockBoxes = Math.trunc(newShuangUnits / spec);
+          const newShuangStockUnits = Number((newShuangUnits % spec).toFixed(4));
+          
+          const newFengStockBoxes = Math.trunc(newFengUnits / spec);
+          const newFengStockUnits = Number((newFengUnits % spec).toFixed(4));
 
-      return {
-          ...item,
-          stockShuangBoxes: newShuangStockBoxes,
-          stockShuangUnits: newShuangStockUnits,
-          stockFengBoxes: newFengStockBoxes,
-          stockFengUnits: newFengStockUnits
-      };
+          return {
+              ...item,
+              stockShuangBoxes: newShuangStockBoxes,
+              stockShuangUnits: newShuangStockUnits,
+              stockFengBoxes: newFengStockBoxes,
+              stockFengUnits: newFengStockUnits
+          };
+        });
     });
 
-    setInventory(updatedInventory);
     setActiveTab('history');
   };
 
-  const handleDeleteHistory = (recordId: string) => {
-    const record = history.find(r => r.id === recordId);
-    if (!record) return;
+  const handleDeleteHistory = (recordToDelete: OutboundRecord) => {
+    // Direct Access: We rely on the record passed from the UI, ensuring we have the exact data to restore.
+    
+    // 1. Restore Inventory (Side Effect: Update Inventory State)
+    setInventory(prevInventory => {
+        return prevInventory.map(invItem => {
+            const recItems = recordToDelete.items.filter(ri => ri.invId === invItem.id);
+            if (recItems.length === 0) return invItem;
 
-    // Restore Stock logic
-    const updatedInventory = inventory.map(invItem => {
-       const recItems = record.items.filter(ri => ri.invId === invItem.id);
-       if (recItems.length === 0) return invItem;
+            const spec = invItem.spec || 1;
+            let totalShuangUnits = ((Number(invItem.stockShuangBoxes)||0) * spec) + (Number(invItem.stockShuangUnits)||0);
+            let totalFengUnits = ((Number(invItem.stockFengBoxes)||0) * spec) + (Number(invItem.stockFengUnits)||0);
 
-       const spec = invItem.spec || 1;
-       let totalShuangUnits = ((invItem.stockShuangBoxes||0) * spec) + (invItem.stockShuangUnits||0);
-       let totalFengUnits = ((invItem.stockFengBoxes||0) * spec) + (invItem.stockFengUnits||0);
+            // Add back the quantities from the deleted record
+            recItems.forEach(ri => {
+                totalShuangUnits += (Number(ri.outShuangBoxes)||0) * spec + (Number(ri.outShuangUnits)||0);
+                totalFengUnits += (Number(ri.outFengBoxes)||0) * spec + (Number(ri.outFengUnits)||0);
+            });
 
-       recItems.forEach(ri => {
-           totalShuangUnits += (ri.outShuangBoxes * spec) + ri.outShuangUnits;
-           totalFengUnits += (ri.outFengBoxes * spec) + ri.outFengUnits;
-       });
-
-       return {
-           ...invItem,
-           stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
-           stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
-           stockFengBoxes: Math.trunc(totalFengUnits / spec),
-           stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
-       };
+            return {
+                ...invItem,
+                stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
+                stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
+                stockFengBoxes: Math.trunc(totalFengUnits / spec),
+                stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
+            };
+        });
     });
 
-    setInventory(updatedInventory);
-    setHistory(history.filter(h => h.id !== recordId));
+    // 2. Update History (Remove Record)
+    setHistory(prevHistory => prevHistory.filter(h => h.id !== recordToDelete.id));
   };
 
   const handleUpdateHistory = (newRecord: OutboundRecord) => {
-     const oldRecord = history.find(r => r.id === newRecord.id);
-     if (!oldRecord) return;
+    // 1. Find the old record to revert
+    const oldRecord = history.find(r => r.id === newRecord.id);
+    if (!oldRecord) {
+        console.error("Old record not found for update");
+        return;
+    }
 
-     // We simulate a revert of old and apply of new
-     const updatedInventory = inventory.map(invItem => {
-         // Revert Old
-         const oldItems = oldRecord.items.filter(ri => ri.invId === invItem.id);
-         // Apply New
-         const newItems = newRecord.items.filter(ri => ri.invId === invItem.id);
-         
-         if (oldItems.length === 0 && newItems.length === 0) return invItem;
+    // 2. Update Inventory: Revert Old -> Apply New
+    setInventory(prevInventory => {
+        return prevInventory.map(invItem => {
+            // Revert Old
+            const oldItems = oldRecord.items.filter(ri => ri.invId === invItem.id);
+            // Apply New
+            const newItems = newRecord.items.filter(ri => ri.invId === invItem.id);
+            
+            if (oldItems.length === 0 && newItems.length === 0) return invItem;
 
-         const spec = invItem.spec || 1;
-         let totalShuangUnits = ((invItem.stockShuangBoxes||0) * spec) + (invItem.stockShuangUnits||0);
-         let totalFengUnits = ((invItem.stockFengBoxes||0) * spec) + (invItem.stockFengUnits||0);
+            const spec = invItem.spec || 1;
+            let totalShuangUnits = ((Number(invItem.stockShuangBoxes)||0) * spec) + (Number(invItem.stockShuangUnits)||0);
+            let totalFengUnits = ((Number(invItem.stockFengBoxes)||0) * spec) + (Number(invItem.stockFengUnits)||0);
 
-         // Add back old
-         oldItems.forEach(ri => {
-             totalShuangUnits += (ri.outShuangBoxes * spec) + ri.outShuangUnits;
-             totalFengUnits += (ri.outFengBoxes * spec) + ri.outFengUnits;
-         });
+            // Add back old (Revert)
+            oldItems.forEach(ri => {
+                totalShuangUnits += (Number(ri.outShuangBoxes)||0) * spec + (Number(ri.outShuangUnits)||0);
+                totalFengUnits += (Number(ri.outFengBoxes)||0) * spec + (Number(ri.outFengUnits)||0);
+            });
 
-         // Subtract new
-         newItems.forEach(ri => {
-             totalShuangUnits -= (ri.outShuangBoxes * spec) + ri.outShuangUnits;
-             totalFengUnits -= (ri.outFengBoxes * spec) + ri.outFengUnits;
-         });
+            // Subtract new (Apply)
+            newItems.forEach(ri => {
+                totalShuangUnits -= (Number(ri.outShuangBoxes)||0) * spec + (Number(ri.outShuangUnits)||0);
+                totalFengUnits -= (Number(ri.outFengBoxes)||0) * spec + (Number(ri.outFengUnits)||0);
+            });
 
-         return {
-             ...invItem,
-             stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
-             stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
-             stockFengBoxes: Math.trunc(totalFengUnits / spec),
-             stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
-         };
-     });
+            return {
+                ...invItem,
+                stockShuangBoxes: Math.trunc(totalShuangUnits / spec),
+                stockShuangUnits: Number((totalShuangUnits % spec).toFixed(4)),
+                stockFengBoxes: Math.trunc(totalFengUnits / spec),
+                stockFengUnits: Number((totalFengUnits % spec).toFixed(4)),
+            };
+        });
+    });
 
-     setInventory(updatedInventory);
-     setHistory(history.map(r => r.id === newRecord.id ? newRecord : r));
+    // 3. Update History Record
+    setHistory(prevHistory => prevHistory.map(r => r.id === newRecord.id ? newRecord : r));
   };
 
   return (
@@ -320,8 +328,8 @@ const App: React.FC = () => {
                  <StatisticsPanel 
                     history={history} 
                     inventory={inventory}
-                    onDeleteRecord={handleDeleteHistory}
-                    onUpdateRecord={handleUpdateHistory}
+                    onDelete={handleDeleteHistory}
+                    onUpdate={handleUpdateHistory}
                  />
               )}
             </>

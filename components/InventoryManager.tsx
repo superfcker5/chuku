@@ -36,7 +36,8 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
       stockShuangBoxes: 0, stockShuangUnits: 0,
       stockFengBoxes: 0, stockFengUnits: 0,
     };
-    setInventory([...inventory, newItem]);
+    // Prepend new item to the beginning of the list (Req: 添加商品放在开头)
+    setInventory([newItem, ...inventory]);
     setEditingId(newItem.id);
     setTempItem(newItem);
   };
@@ -116,7 +117,13 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
   };
 
   const processImportData = (items: ImportPreviewItem[]) => {
-    const updatedInventory = [...inventory];
+    // 1. Map existing inventory for fast lookup by name. Map preserves insertion order.
+    const existingMap = new Map<string, InventoryItem>();
+    inventory.forEach(item => existingMap.set(item.name, item));
+    
+    // 2. Build a new list that follows the IMPORT FILE ORDER (Req: 以导入表格顺序为准)
+    const newOrderedInventory: InventoryItem[] = [];
+    
     let addedCount = 0;
     let mergedCount = 0;
 
@@ -124,12 +131,12 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
         const name = p.name ? p.name.replace(/[\r\n]+/g, '').trim() : '';
         if (!name) return;
 
-        const existingIndex = updatedInventory.findIndex(i => i.name === name);
-        
         const pSpec = p.spec || 1;
+        
         const pShuangBoxes = p.stockShuangBoxes || 0;
         const pFengBoxes = p.stockFengBoxes || 0;
         
+        // Use incoming spec to calc totals
         const incomingTotalShuang = pShuangBoxes * pSpec;
         const incomingTotalFeng = pFengBoxes * pSpec;
 
@@ -139,9 +146,10 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
         const pRetailBox = p.retailPriceBox > 0 ? p.retailPriceBox : p.wholesalePriceBox;
         const pRetailUnit = p.retailPriceUnit > 0 ? p.retailPriceUnit : (pRetailBox / pSpec);
 
-        if (existingIndex >= 0) {
-            // MERGE
-            const item = updatedInventory[existingIndex];
+        if (existingMap.has(name)) {
+            // MERGE: Item exists, take ID and merge props
+            const item = existingMap.get(name)!;
+            // Use spec from file if valid, else keep existing
             const finalSpec = p.spec > 0 ? p.spec : item.spec;
             
             let newTotalShuang = 0;
@@ -160,7 +168,7 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
             const shuang = normalizeStock(0, newTotalShuang, finalSpec);
             const feng = normalizeStock(0, newTotalFeng, finalSpec);
             
-            updatedInventory[existingIndex] = {
+            const updatedItem: InventoryItem = {
                 ...item,
                 spec: finalSpec,
                 
@@ -177,13 +185,17 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
                 stockFengBoxes: feng.boxes,
                 stockFengUnits: feng.units
             };
+            
+            newOrderedInventory.push(updatedItem);
+            existingMap.delete(name); // Remove from map so we know it's handled
             mergedCount++;
         } else {
-            // NEW
+            // NEW: Create item and push to list (in file order)
+            // Calc standard stock
             const shuang = normalizeStock(0, incomingTotalShuang, pSpec);
             const feng = normalizeStock(0, incomingTotalFeng, pSpec);
 
-            updatedInventory.push({
+            const newItem: InventoryItem = {
                 id: crypto.randomUUID(),
                 name: name,
                 spec: pSpec,
@@ -198,16 +210,24 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
                 stockShuangUnits: shuang.units,
                 stockFengBoxes: feng.boxes,
                 stockFengUnits: feng.units
-            });
+            };
+            newOrderedInventory.push(newItem);
             addedCount++;
         }
     });
 
-    setInventory(updatedInventory);
+    // 3. Append remaining items (items in DB but NOT in import file) to the end
+    // This preserves them while respecting the import file's primary order.
+    // Map values iteration respects insertion order of original inventory.
+    const remainingItems = Array.from(existingMap.values());
+    
+    // 4. Update State
+    setInventory([...newOrderedInventory, ...remainingItems]);
+    
     setIsImportModalOpen(false);
     setImportText('');
     const actionText = importMode === 'add' ? '增加库存' : '更新/覆盖库存';
-    alert(`操作完成！\n新增商品: ${addedCount} 个\n${actionText}: ${mergedCount} 个`);
+    alert(`操作完成！\n新增商品: ${addedCount} 个\n${actionText}: ${mergedCount} 个\n(列表顺序已更新为表格顺序，未包含的商品已移至末尾)`);
   };
 
   const handleAIImport = async () => {
@@ -240,6 +260,7 @@ const InventoryManager: React.FC<Props> = ({ inventory, setInventory }) => {
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
         
+        // Intelligent Header Search
         let startIndex = -1;
         for(let i=0; i<Math.min(data.length, 5); i++) {
             const rowStr = data[i].join(' ').toLowerCase();

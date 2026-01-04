@@ -7,13 +7,13 @@ import { Search, Download, Users, List, BarChart3, TrendingUp, Wallet, User, Che
 interface Props {
   history: OutboundRecord[];
   inventory: InventoryItem[];
-  onDeleteRecord: (id: string) => void;
-  onUpdateRecord: (record: OutboundRecord) => void;
+  onDelete: (record: OutboundRecord) => void;
+  onUpdate: (record: OutboundRecord) => void;
 }
 
 type ViewMode = 'overview' | 'person_rank' | 'product_matrix';
 
-const StatisticsPanel: React.FC<Props> = ({ history, inventory, onDeleteRecord, onUpdateRecord }) => {
+const StatisticsPanel: React.FC<Props> = ({ history, inventory, onDelete, onUpdate }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   
   // Filters
@@ -355,8 +355,8 @@ const StatisticsPanel: React.FC<Props> = ({ history, inventory, onDeleteRecord, 
               <HistoryTable 
                 history={filteredHistory} 
                 inventory={inventory}
-                onDelete={onDeleteRecord}
-                onUpdate={onUpdateRecord}
+                onDelete={onDelete} 
+                onUpdate={onUpdate}
               />
           )}
 

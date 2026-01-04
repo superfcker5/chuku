@@ -51,15 +51,19 @@ const OutboundProcessor: React.FC<Props> = ({ inventory, onCommit }) => {
     }
 
     // 2. Item Extraction
-    const itemRegex = /^(\d+)\.\s*(.+?)[:：]\s*(.+?)\s*=\s*[￥¥]?([\d\.]+)/;
-    const boxRegex = /([\d\.]+)\s*箱/;
-    const unitRegex = /([\d\.]+)\s*个/;
+    // Support "1." or "1、"
+    // Support commas in price: 1,200.00
+    const itemRegex = /^(\d+)[\.\、]\s*(.+?)[:：]\s*(.+?)\s*=\s*[￥¥]?([\d\.,]+)/;
+    
+    // Support commas in quantities: 1,000箱
+    const boxRegex = /([\d\.,]+)\s*箱/;
+    const unitRegex = /([\d\.,]+)\s*个/;
 
     const items: OutboundItemParsed[] = [];
 
     for (let i = startIndex; i < lines.length; i++) {
       const line = lines[i];
-      if (line.startsWith('💰')) continue; // Skip total line
+      if (line.startsWith('💰') || line.startsWith('总计') || line.includes('总计:')) continue; 
 
       const match = line.match(itemRegex);
       if (match) {
@@ -71,10 +75,10 @@ const OutboundProcessor: React.FC<Props> = ({ inventory, onCommit }) => {
         let qtyUnits = 0;
 
         const boxMatch = contentStr.match(boxRegex);
-        if (boxMatch) qtyBoxes = parseFloat(boxMatch[1]);
+        if (boxMatch) qtyBoxes = parseFloat(boxMatch[1].replace(/,/g, ''));
 
         const unitMatch = contentStr.match(unitRegex);
-        if (unitMatch) qtyUnits = parseFloat(unitMatch[1]);
+        if (unitMatch) qtyUnits = parseFloat(unitMatch[1].replace(/,/g, ''));
 
         items.push({
           rawLine: line,
